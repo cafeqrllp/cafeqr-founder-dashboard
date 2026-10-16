@@ -1,0 +1,13 @@
+import Head from 'next/head';
+
+export default function App({ Component, pageProps }) {
+  return (
+    <>
+      <Head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <title>Founder Dashboard & Sales CRM | Cafe QR</title>
+      </Head>
+      <Component {...pageProps} />
+    </>
+  );
+}
