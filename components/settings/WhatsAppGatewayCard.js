@@ -32,7 +32,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     isFetchingRef.current = true;
     try {
       const params = sessionId ? { sessionId } : {};
-      const res = await api.get('/api/v1/whatsapp/status', { params });
+      const res = await api.get('/api/v1/founder/whatsapp/status', { params });
       const data = res.data?.data || res.data || {};
       
       const st = data.status || 'DISCONNECTED';
@@ -57,7 +57,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
   const fetchQr = async () => {
     try {
       const params = sessionId ? { sessionId } : {};
-      const res = await api.get('/api/v1/whatsapp/qr', { params });
+      const res = await api.get('/api/v1/founder/whatsapp/qr', { params });
       const data = res.data?.data || res.data || {};
       if (data.qr) {
         setQrCodeUrl(data.qr);
@@ -113,7 +113,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     setLoading(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      await api.post('/api/v1/whatsapp/disconnect', { sessionId });
+      await api.post('/api/v1/founder/whatsapp/disconnect', { sessionId });
       setGatewayStatus('DISCONNECTED');
       setConnectedUser(null);
       setQrCodeUrl(null);
@@ -135,7 +135,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     setTestSending(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      const res = await api.post('/api/v1/whatsapp/test', { phone: testPhone.trim(), sessionId });
+      const res = await api.post('/api/v1/founder/whatsapp/test', { phone: testPhone.trim(), sessionId });
       const data = res.data?.data || res.data || {};
       if (data.success !== false) {
         setFeedbackMsg({ text: `✓ Test receipt sent successfully to +${testPhone}!`, type: 'success' });
@@ -174,7 +174,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     setTestSending(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      const res = await api.post('/api/v1/whatsapp/clear-contact-session', { phone: testPhone.trim(), sessionId });
+      const res = await api.post('/api/v1/founder/whatsapp/clear-contact-session', { phone: testPhone.trim(), sessionId });
       const data = res.data?.data || res.data || {};
       setFeedbackMsg({ 
         text: `✓ Signal session reset for +${testPhone}. Next message will re-negotiate fresh encryption keys.`, 
