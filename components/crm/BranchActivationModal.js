@@ -59,7 +59,21 @@ export default function BranchActivationModal({
 
   useEffect(() => {
     if (branch) {
-      setSelectedBranchId(branch.id || branch.orgId || '')
+      const directId = branch.id || branch.orgId
+      let matchedBranch = availableBranches.find(b => b.id === directId)
+      if (!matchedBranch && branch.clientId) {
+        matchedBranch = availableBranches.find(b => b.clientId === branch.clientId && (!branch.branchCode || b.branchCode === branch.branchCode)) ||
+                        availableBranches.find(b => b.clientId === branch.clientId)
+      }
+      if (matchedBranch) {
+        setSelectedBranchId(matchedBranch.id)
+        if (matchedBranch.modules && matchedBranch.modules.length > 0 && (!branch.modules || branch.modules.length === 0)) {
+          setSelectedModules(matchedBranch.modules.map(m => typeof m === 'string' ? m : m.moduleName))
+        }
+      } else if (directId) {
+        setSelectedBranchId(directId)
+      }
+
       if (branch.modules && branch.modules.length > 0) {
         setSelectedModules(branch.modules.map(m => typeof m === 'string' ? m : m.moduleName))
       }

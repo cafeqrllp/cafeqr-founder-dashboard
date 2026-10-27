@@ -10,6 +10,8 @@ const STATUSES = [
   { key: 'DEMO_SCHEDULED', label: '📅 Demo Scheduled' },
   { key: 'ONBOARDED_TRIAL', label: '⏳ Onboarded (Free Trial)' },
   { key: 'PAID_ACTIVE', label: '💳 Paid & Active' },
+  { key: 'EXISTING_RETAINED', label: '👑 Retained Account' },
+  { key: 'AT_RISK_RENEWAL', label: '⚠️ At Risk / Renewal Due' },
   { key: 'COLD_FOLLOW_UP', label: '❄️ Cold Follow-Up' },
   { key: 'LOST', label: '❌ Lost / Dropped' },
 ]

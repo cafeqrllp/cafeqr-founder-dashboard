@@ -611,7 +611,7 @@ function OnboardingFunnelView({ clients, onNudgeWhatsApp, onInspectStore }) {
   const stage3 = clients.filter(c => (c.menuItemsCount || 0) >= 3).length
   const stage4 = clients.filter(c => (c.tablesCount || 0) >= 1).length
   const stage5 = clients.filter(c => (c.orderCount || 0) >= 1).length
-  const stage6 = clients.filter(c => (c.subscriptionStatus || '').toUpperCase() === 'ACTIVE' && c.totalPaidPaise > 0).length
+  const stage6 = clients.filter(c => ((c.effectiveSubscriptionStatus || c.subscriptionStatus || '').toUpperCase() === 'ACTIVE')).length
 
   const stages = [
     { title: '1. Registered Signups', count: stage1, desc: 'All registered accounts', color: T.blue },
@@ -1662,6 +1662,7 @@ function Dashboard({ founderKey }) {
                   onDeleteLead={handleDeleteLead}
                   onUpdateLeadStatus={handleUpdateLeadStatus}
                   onLogActivity={handleLogActivity}
+                  onInspectStore={handleInspectStore}
                 />
               </div>
             )}
