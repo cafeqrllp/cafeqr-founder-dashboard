@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import axios from 'axios'
-import { FiX, FiCheck, FiCalendar, FiPackage, FiZap, FiCheckCircle } from 'react-icons/fi'
+import { FiX, FiCheck, FiCalendar, FiPackage, FiZap, FiCheckCircle, FiDollarSign, FiAlertCircle } from 'react-icons/fi'
+
+const BASE_POS_ANNUAL_PRICE = 999
 
 const ALL_MODULES = [
-  { key: 'KOT', label: 'KOT & Kitchen Display', desc: 'Kitchen tickets, stations, print jobs' },
-  { key: 'INVENTORY', label: 'Inventory & Recipe Costing', desc: 'Stock alerts, raw items, deductions' },
-  { key: 'TABLE_QR', label: 'Dine-In Table QR Ordering', desc: 'Customer self-order & table service' },
-  { key: 'CRM', label: 'CRM & Loyalty Marketing', desc: 'Customer directory & SMS/WhatsApp' },
-  { key: 'CREDIT_LEDGER', label: 'Credit Ledger (Khata)', desc: 'Merchant & customer credit balances' },
-  { key: 'BARCODE_SCANNER', label: 'Barcode Scanner Integration', desc: 'Instant item lookup at POS' },
-  { key: 'MENU_IMAGES', label: 'Visual Menu Photos', desc: 'High-res food dish images on digital menu' },
-  { key: 'ONLINE_DELIVERY', label: 'Direct Online Delivery Website', desc: 'Customer direct storefront' },
+  { key: 'KOT', label: 'KOT & Kitchen Display (KDS)', desc: 'Kitchen tickets, stations, print jobs', priceAnnual: 499, scope: 'Branch-scoped' },
+  { key: 'INVENTORY', label: 'Inventory & Recipe Costing ERP', desc: 'Stock alerts, raw items, deductions', priceAnnual: 1999, scope: 'Branch-scoped' },
+  { key: 'TABLE_QR', label: 'Dine-In Table QR Ordering', desc: 'Customer self-order & table service', priceAnnual: 0, scope: 'Included in Base' },
+  { key: 'CRM', label: 'CRM & Customer Loyalty', desc: 'Customer directory & SMS/WhatsApp', priceAnnual: 999, scope: 'Client-scoped' },
+  { key: 'CREDIT_LEDGER', label: 'Credit Ledger (Udhaar / Khata)', desc: 'Merchant & customer credit balances', priceAnnual: 499, scope: 'Client-scoped' },
+  { key: 'BARCODE_SCANNER', label: 'Barcode Scanner & Label Printing', desc: 'Instant item lookup at POS', priceAnnual: 999, scope: 'Client-scoped' },
+  { key: 'MENU_IMAGES', label: 'Visual Menu Photos', desc: 'High-res food dish images on digital menu', priceAnnual: 0, scope: 'Included in Base' },
+  { key: 'ONLINE_DELIVERY', label: 'Direct Online Delivery Website', desc: 'Customer direct storefront', priceAnnual: 0, scope: 'Included in Base' },
 ]
 
 export default function BranchActivationModal({
@@ -23,14 +25,18 @@ export default function BranchActivationModal({
   onSuccess
 }) {
   const [selectedBranchId, setSelectedBranchId] = useState('')
-  const [daysToAdd, setDaysToAdd] = useState(30)
-  const [subStatus, setSubStatus] = useState('ACTIVE')
-  const [selectedModules, setSelectedModules] = useState(['KOT', 'INVENTORY', 'TABLE_QR'])
+  const [daysToAdd, setDaysToAdd] = useState(365)
+  const [selectedModules, setSelectedModules] = useState(['KOT', 'INVENTORY', 'TABLE_QR', 'CRM', 'CREDIT_LEDGER', 'BARCODE_SCANNER'])
+  const [recordPayment, setRecordPayment] = useState(true)
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [isAmountManuallyEdited, setIsAmountManuallyEdited] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState('UPI')
+  const [paymentNotes, setPaymentNotes] = useState('')
   const [loading, setLoading] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
 
   // Flatten all branches across clients for the selector
-  const availableBranches = React.useMemo(() => {
+  const availableBranches = useMemo(() => {
     const list = []
     for (const c of allClients || []) {
       if (c.branches && c.branches.length > 0) {
@@ -56,6 +62,26 @@ export default function BranchActivationModal({
     }
     return list
   }, [allClients])
+
+  // Calculate live modules total
+  const calculatedModulesTotal = useMemo(() => {
+    return selectedModules.reduce((acc, mKey) => {
+      const mod = ALL_MODULES.find(m => m.key === mKey)
+      return acc + (mod ? mod.priceAnnual : 0)
+    }, 0)
+  }, [selectedModules])
+
+  // Annual standard total based on active modules + base POS
+  const calculatedStandardTotal = useMemo(() => {
+    return BASE_POS_ANNUAL_PRICE + calculatedModulesTotal
+  }, [calculatedModulesTotal])
+
+  // Update default payment amount whenever modules change (unless user custom edited it)
+  useEffect(() => {
+    if (!isAmountManuallyEdited) {
+      setPaymentAmount(calculatedStandardTotal)
+    }
+  }, [calculatedStandardTotal, isAmountManuallyEdited])
 
   useEffect(() => {
     if (branch) {
@@ -108,20 +134,30 @@ export default function BranchActivationModal({
       return
     }
 
+    const numericAmount = parseFloat(paymentAmount)
+    if (recordPayment && (isNaN(numericAmount) || numericAmount < 0)) {
+      alert('Please enter a valid payment amount.')
+      return
+    }
+
     try {
       setLoading(true)
       setSuccessMsg('')
-      const res = await axios.post(
+      await axios.post(
         `${apiBase}/api/v1/founder/organization/${selectedBranchId}/activate-subscription`,
         {
           daysToAdd: parseInt(daysToAdd),
-          subscriptionStatus: subStatus,
-          activeModules: selectedModules
+          subscriptionStatus: 'ACTIVE',
+          activeModules: selectedModules,
+          recordPayment: recordPayment,
+          paymentAmountPaise: recordPayment ? Math.round(numericAmount * 100) : 0,
+          paymentMethod: paymentMethod,
+          paymentNotes: paymentNotes.trim()
         },
         { headers: { 'X-Founder-Key': founderKey } }
       )
 
-      setSuccessMsg('Branch subscription & modules activated successfully!')
+      setSuccessMsg('Branch subscription, add-on modules & payment ledger updated successfully!')
       if (onSuccess) onSuccess()
       setTimeout(() => {
         onClose()
@@ -140,8 +176,8 @@ export default function BranchActivationModal({
       left: 0,
       right: 0,
       bottom: 0,
-      background: 'rgba(15, 23, 42, 0.65)',
-      backdropFilter: 'blur(6px)',
+      background: 'rgba(15, 23, 42, 0.7)',
+      backdropFilter: 'blur(8px)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -151,11 +187,11 @@ export default function BranchActivationModal({
       <div style={{
         background: '#FFFFFF',
         borderRadius: 20,
-        maxWidth: 620,
+        maxWidth: 680,
         width: '100%',
-        maxHeight: '90vh',
+        maxHeight: '92vh',
         overflowY: 'auto',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
         border: '1px solid #E2E8F0',
         display: 'flex',
         flexDirection: 'column'
@@ -171,10 +207,10 @@ export default function BranchActivationModal({
         }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: '#0F172A', fontFamily: 'Outfit, sans-serif' }}>
-              ⚡ 1-Click Branch & Modules Activation
+              ⚡ Branch Module Activation & Billing Engine
             </h3>
             <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#64748B' }}>
-              Extends branch expiry date and activates add-on modules automatically
+              Extends branch license, activates add-on ERP modules & automatically records revenue
             </p>
           </div>
           <button
@@ -250,6 +286,10 @@ export default function BranchActivationModal({
                   {activeBranchObj.subscriptionExpiryDate ? new Date(activeBranchObj.subscriptionExpiryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Never activated'}
                 </span>
               </div>
+              <div>
+                <span style={{ color: '#64748B' }}>Commercial Policy: </span>
+                <span style={{ fontWeight: 800, color: '#FF7A00' }}>Strict Paid (Zero-Trial)</span>
+              </div>
             </div>
           )}
 
@@ -260,10 +300,10 @@ export default function BranchActivationModal({
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 10 }}>
               {[
-                { days: 30, label: '+30 Days (1 Mo)' },
-                { days: 90, label: '+90 Days (3 Mo)' },
-                { days: 180, label: '+180 Days (6 Mo)' },
-                { days: 365, label: '+365 Days (1 Yr)' },
+                { days: 365, label: '365 Days (1 Yr Annual)' },
+                { days: 90, label: '90 Days (Quarterly)' },
+                { days: 180, label: '180 Days (Half-Year)' },
+                { days: 730, label: '730 Days (2 Years)' },
               ].map(p => (
                 <button
                   key={p.days}
@@ -302,29 +342,17 @@ export default function BranchActivationModal({
                   fontWeight: 700
                 }}
               />
-              <span style={{ fontSize: 12, color: '#64748B' }}>Status:</span>
-              <select
-                value={subStatus}
-                onChange={e => setSubStatus(e.target.value)}
-                style={{
-                  padding: '6px 10px',
-                  borderRadius: 8,
-                  border: '1.5px solid #CBD5E1',
-                  fontSize: 12,
-                  fontWeight: 700
-                }}
-              >
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="TRIAL">TRIAL</option>
-              </select>
+              <span style={{ fontSize: 12, color: '#10B981', fontWeight: 700 }}>
+                Status: ACTIVE (Paid License)
+              </span>
             </div>
           </div>
 
-          {/* Module Toggles */}
+          {/* Module Toggles with Exact Codebase Prices */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
-                Activate Add-On Modules
+                Active Add-On Modules & Exact Pricing
               </label>
               <button
                 type="button"
@@ -343,7 +371,7 @@ export default function BranchActivationModal({
               </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
               {ALL_MODULES.map(mod => {
                 const isChecked = selectedModules.includes(mod.key)
                 return (
@@ -378,11 +406,20 @@ export default function BranchActivationModal({
                     }}>
                       {isChecked && <FiCheck strokeWidth={3} />}
                     </div>
-                    <div>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, color: isChecked ? '#0F172A' : '#334155' }}>
-                        {mod.label}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: isChecked ? '#0F172A' : '#334155' }}>
+                          {mod.label}
+                        </span>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: mod.priceAnnual > 0 ? '#10B981' : '#64748B'
+                        }}>
+                          {mod.priceAnnual > 0 ? `₹${mod.priceAnnual.toLocaleString('en-IN')}/yr` : 'Included'}
+                        </span>
                       </div>
-                      <div style={{ fontSize: 10.5, color: '#94A3B8' }}>
+                      <div style={{ fontSize: 10.5, color: '#94A3B8', marginTop: 2 }}>
                         {mod.desc}
                       </div>
                     </div>
@@ -390,6 +427,139 @@ export default function BranchActivationModal({
                 )
               })}
             </div>
+          </div>
+
+          {/* Pricing Summary & Mandatory Payment Recording Box */}
+          <div style={{
+            background: '#F8FAFC',
+            border: '1.5px solid #E2E8F0',
+            borderRadius: 14,
+            padding: '16px 18px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
+                  Standard Annual Contract Value
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', fontFamily: 'Outfit, sans-serif' }}>
+                  ₹{calculatedStandardTotal.toLocaleString('en-IN')} <span style={{ fontSize: 12, color: '#64748B', fontWeight: 600 }}>/ year</span>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', fontSize: 11, color: '#64748B' }}>
+                <div>Base POS: <strong>₹{BASE_POS_ANNUAL_PRICE}</strong></div>
+                <div>Add-ons ({selectedModules.length}): <strong>₹{calculatedModulesTotal}</strong></div>
+              </div>
+            </div>
+
+            {/* Checkbox: Record Payment */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
+              <input
+                type="checkbox"
+                checked={recordPayment}
+                onChange={e => setRecordPayment(e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: '#FF7A00' }}
+              />
+              <span>💰 Record Payment in Ledger (Audit Trail & Accurate Revenue)</span>
+            </label>
+
+            {recordPayment && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, paddingTop: 4 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                    Amount Collected (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={paymentAmount}
+                    onChange={e => {
+                      setPaymentAmount(e.target.value)
+                      setIsAmountManuallyEdited(true)
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      border: '1.5px solid #CBD5E1',
+                      fontSize: 13,
+                      fontWeight: 800,
+                      color: '#0F172A',
+                      background: '#FFFFFF'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                    Payment Mode
+                  </label>
+                  <select
+                    value={paymentMethod}
+                    onChange={e => setPaymentMethod(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      border: '1.5px solid #CBD5E1',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      color: '#0F172A',
+                      background: '#FFFFFF'
+                    }}
+                  >
+                    <option value="UPI">UPI (GPay / PhonePe / Paytm)</option>
+                    <option value="BANK_TRANSFER">Bank Transfer (IMPS / NEFT)</option>
+                    <option value="CASH">Direct Cash</option>
+                    <option value="RAZORPAY">Razorpay Online Gateway</option>
+                    <option value="PENDING_INVOICE">📋 Pending Invoice (Accounts Receivable / Payment Due)</option>
+                  </select>
+                </div>
+
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                    Transaction Reference / Remarks
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. UPI Ref #493821039, Cheque #01923, or custom package note"
+                    value={paymentNotes}
+                    onChange={e => setPaymentNotes(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      border: '1.5px solid #CBD5E1',
+                      fontSize: 12.5,
+                      color: '#0F172A',
+                      background: '#FFFFFF'
+                    }}
+                  />
+                </div>
+
+                {paymentMethod === 'PENDING_INVOICE' && (
+                  <div style={{
+                    gridColumn: '1 / -1',
+                    background: '#FEF3C7',
+                    border: '1px solid #FCD34D',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 11.5,
+                    color: '#92400E',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
+                  }}>
+                    <FiAlertCircle size={14} />
+                    <span>Strict Commercial Policy: ₹{paymentAmount || 0} is recorded as an outstanding Accounts Receivable. Zero free trials permitted.</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {successMsg && (
@@ -456,7 +626,7 @@ export default function BranchActivationModal({
             }}
           >
             <FiZap />
-            <span>{loading ? 'Activating...' : 'Activate Branch & Modules'}</span>
+            <span>{loading ? 'Activating & Recording...' : 'Activate Branch & Modules'}</span>
           </button>
         </div>
       </div>
