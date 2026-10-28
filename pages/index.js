@@ -370,10 +370,30 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
 
         {/* Revenue */}
         <td style={{ padding: '12px 18px', textAlign: 'right' }}>
-          <div style={{ color: T.green, fontWeight: 700, fontSize: 14, fontFamily: 'Outfit, sans-serif' }}>
+          <div style={{ color: T.green, fontWeight: 800, fontSize: 14, fontFamily: 'Outfit, sans-serif' }}>
             {fmtRupees(client.totalPaidPaise)}
           </div>
-          <div style={{ color: T.textMuted, fontSize: 11, marginTop: 1 }}>{client.paymentCount} payment{client.paymentCount !== 1 ? 's' : ''}</div>
+          <div style={{ color: T.textMuted, fontSize: 11, marginTop: 1 }}>
+            {client.paymentCount} payment{client.paymentCount !== 1 ? 's' : ''}
+          </div>
+          {client.contractedArrPaise > client.totalPaidPaise && (
+            <div style={{ marginTop: 4, display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+              <span style={{ fontSize: 10, color: '#475569', fontWeight: 600 }}>
+                Value: <strong style={{ color: '#0F172A' }}>{fmtRupees(client.contractedArrPaise)}/yr</strong>
+              </span>
+              <span style={{
+                fontSize: 9.5,
+                fontWeight: 800,
+                color: '#C2410C',
+                background: '#FFF7ED',
+                border: '1px solid #FFEDD5',
+                borderRadius: 4,
+                padding: '1px 5px'
+              }}>
+                ⚠ {fmtRupees(client.unbilledVariancePaise)} unbilled
+              </span>
+            </div>
+          )}
         </td>
 
         {/* Quick Actions & Expand Toggle */}
