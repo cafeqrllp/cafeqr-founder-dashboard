@@ -3,6 +3,7 @@ import axios from 'axios'
 import { FiX, FiCheck, FiCalendar, FiPackage, FiZap, FiCheckCircle, FiDollarSign, FiAlertCircle } from 'react-icons/fi'
 
 const BASE_POS_ANNUAL_PRICE = 999
+const ONE_TIME_SETUP_CHARGE = 1499
 
 const ALL_MODULES = [
   { key: 'KOT', label: 'KOT & Kitchen Display (KDS)', desc: 'Kitchen tickets, stations, print jobs', priceAnnual: 499, scope: 'Branch-scoped' },
@@ -25,7 +26,10 @@ export default function BranchActivationModal({
   onSuccess
 }) {
   const [selectedBranchId, setSelectedBranchId] = useState('')
+  const [activationMode, setActivationMode] = useState('EXTEND') // 'EXTEND' or 'CO_TERM'
   const [daysToAdd, setDaysToAdd] = useState(365)
+  const [includeSetupCharge, setIncludeSetupCharge] = useState(false)
+  const [includeBasePos, setIncludeBasePos] = useState(true)
   const [selectedModules, setSelectedModules] = useState(['KOT', 'INVENTORY', 'TABLE_QR', 'CRM', 'CREDIT_LEDGER', 'BARCODE_SCANNER'])
   const [recordPayment, setRecordPayment] = useState(true)
   const [paymentAmount, setPaymentAmount] = useState('')
@@ -56,27 +60,85 @@ export default function BranchActivationModal({
           clientId: c.id,
           subscriptionStatus: c.subscriptionStatus,
           subscriptionExpiryDate: c.subscriptionExpiryDate,
-          modules: c.subscriptionModules || []
+          modules: c.subscriptionModules || [],
+          totalPaidPaise: c.totalPaidPaise || 0,
+          paymentCount: c.paymentCount || 0
         })
       }
     }
     return list
   }, [allClients])
 
-  // Calculate live modules total
+  const activeBranchObj = availableBranches.find(b => b.id === selectedBranchId) || branch
+
+  // Determine current active expiry and remaining days
+  const now = useMemo(() => new Date(), [])
+  const currentExpiry = useMemo(() => {
+    return activeBranchObj?.subscriptionExpiryDate ? new Date(activeBranchObj.subscriptionExpiryDate) : null
+  }, [activeBranchObj])
+
+  const isCurrentlyActive = useMemo(() => {
+    return currentExpiry && currentExpiry > now
+  }, [currentExpiry, now])
+
+  const remainingDays = useMemo(() => {
+    if (!isCurrentlyActive || !currentExpiry) return 0
+    return Math.max(1, Math.ceil((currentExpiry - now) / (1000 * 60 * 60 * 24)))
+  }, [isCurrentlyActive, currentExpiry, now])
+
+  // Effective days for calculation
+  const effectiveDays = useMemo(() => {
+    if (activationMode === 'CO_TERM' && isCurrentlyActive) {
+      return remainingDays
+    }
+    return Math.max(1, parseInt(daysToAdd) || 365)
+  }, [activationMode, isCurrentlyActive, remainingDays, daysToAdd])
+
+  // Automatically adjust setup charge default when branch changes
+  useEffect(() => {
+    if (activeBranchObj) {
+      const hasPriorPayment = (activeBranchObj.totalPaidPaise && activeBranchObj.totalPaidPaise > 0) || (activeBranchObj.paymentCount && activeBranchObj.paymentCount > 0)
+      const hasActiveLicense = isCurrentlyActive
+      // If brand new branch (no prior payments, no active license), default setup charge to true
+      if (!hasPriorPayment && !hasActiveLicense) {
+        setIncludeSetupCharge(true)
+      } else {
+        setIncludeSetupCharge(false)
+      }
+    }
+  }, [selectedBranchId, isCurrentlyActive])
+
+  // Calculate live modules total with proration
   const calculatedModulesTotal = useMemo(() => {
     return selectedModules.reduce((acc, mKey) => {
       const mod = ALL_MODULES.find(m => m.key === mKey)
-      return acc + (mod ? mod.priceAnnual : 0)
+      if (!mod || mod.priceAnnual === 0) return acc
+      const prorated = Math.round((mod.priceAnnual * effectiveDays) / 365)
+      return acc + prorated
     }, 0)
-  }, [selectedModules])
+  }, [selectedModules, effectiveDays])
 
-  // Annual standard total based on active modules + base POS
+  // Base POS price (₹0 if co-terming with active license or if toggled off)
+  const calculatedBasePrice = useMemo(() => {
+    if (activationMode === 'CO_TERM' && isCurrentlyActive) {
+      return 0
+    }
+    if (!includeBasePos) {
+      return 0
+    }
+    return Math.round((BASE_POS_ANNUAL_PRICE * effectiveDays) / 365)
+  }, [activationMode, isCurrentlyActive, includeBasePos, effectiveDays])
+
+  const calculatedSetupPrice = useMemo(() => {
+    return includeSetupCharge ? ONE_TIME_SETUP_CHARGE : 0
+  }, [includeSetupCharge])
+
+  // Total standard calculation
   const calculatedStandardTotal = useMemo(() => {
-    return BASE_POS_ANNUAL_PRICE + calculatedModulesTotal
-  }, [calculatedModulesTotal])
+    return calculatedSetupPrice + calculatedBasePrice + calculatedModulesTotal
+  }, [calculatedSetupPrice, calculatedBasePrice, calculatedModulesTotal])
 
-  // Update default payment amount whenever modules change (unless user custom edited it)
+  // Update default payment amount whenever calculation changes (unless user custom edited it)
   useEffect(() => {
     if (!isAmountManuallyEdited) {
       setPaymentAmount(calculatedStandardTotal)
@@ -110,9 +172,8 @@ export default function BranchActivationModal({
 
   if (!isOpen) return null
 
-  const activeBranchObj = availableBranches.find(b => b.id === selectedBranchId) || branch
-
   const handleToggleModule = (modKey) => {
+    setIsAmountManuallyEdited(false)
     if (selectedModules.includes(modKey)) {
       setSelectedModules(selectedModules.filter(k => k !== modKey))
     } else {
@@ -121,6 +182,7 @@ export default function BranchActivationModal({
   }
 
   const handleSelectAllModules = () => {
+    setIsAmountManuallyEdited(false)
     if (selectedModules.length === ALL_MODULES.length) {
       setSelectedModules([])
     } else {
@@ -143,16 +205,27 @@ export default function BranchActivationModal({
     try {
       setLoading(true)
       setSuccessMsg('')
+
+      const isCoTerm = activationMode === 'CO_TERM' && isCurrentlyActive
+      const targetDays = isCoTerm ? 0 : parseInt(daysToAdd)
+      const targetExpiryDate = isCoTerm && activeBranchObj?.subscriptionExpiryDate ? activeBranchObj.subscriptionExpiryDate : null
+
+      const notesParts = []
+      if (isCoTerm) notesParts.push(`[Co-Term ${effectiveDays}d]`)
+      if (includeSetupCharge) notesParts.push(`[Setup ₹1499]`)
+      if (paymentNotes.trim()) notesParts.push(paymentNotes.trim())
+
       await axios.post(
         `${apiBase}/api/v1/founder/organization/${selectedBranchId}/activate-subscription`,
         {
-          daysToAdd: parseInt(daysToAdd),
+          daysToAdd: targetDays,
+          specificExpiryDate: targetExpiryDate,
           subscriptionStatus: 'ACTIVE',
           activeModules: selectedModules,
           recordPayment: recordPayment,
           paymentAmountPaise: recordPayment ? Math.round(numericAmount * 100) : 0,
           paymentMethod: paymentMethod,
-          paymentNotes: paymentNotes.trim()
+          paymentNotes: notesParts.join(' ')
         },
         { headers: { 'X-Founder-Key': founderKey } }
       )
@@ -293,58 +366,170 @@ export default function BranchActivationModal({
             </div>
           )}
 
-          {/* Duration Presets */}
-          <div>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 8 }}>
-              Extend Expiry Duration
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 10 }}>
-              {[
-                { days: 365, label: '365 Days (1 Yr Annual)' },
-                { days: 90, label: '90 Days (Quarterly)' },
-                { days: 180, label: '180 Days (Half-Year)' },
-                { days: 730, label: '730 Days (2 Years)' },
-              ].map(p => (
+          {/* Commercial Mode Selection (If already active) */}
+          {isCurrentlyActive && (
+            <div style={{
+              background: '#FFF8F0',
+              border: '1.5px solid #FFD8B3',
+              borderRadius: 12,
+              padding: '12px 16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#C2410C', textTransform: 'uppercase' }}>
+                Active Plan Commercial Mode
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <button
-                  key={p.days}
                   type="button"
-                  onClick={() => setDaysToAdd(p.days)}
+                  onClick={() => { setActivationMode('CO_TERM'); setIsAmountManuallyEdited(false) }}
                   style={{
-                    padding: '9px 12px',
+                    padding: '10px 14px',
                     borderRadius: 10,
-                    border: `1.5px solid ${daysToAdd === p.days ? '#FF7A00' : '#E2E8F0'}`,
-                    background: daysToAdd === p.days ? '#FFF3E8' : '#FFFFFF',
-                    color: daysToAdd === p.days ? '#FF7A00' : '#475569',
+                    border: `1.5px solid ${activationMode === 'CO_TERM' ? '#FF7A00' : '#E2E8F0'}`,
+                    background: activationMode === 'CO_TERM' ? '#FFFFFF' : '#F8FAFC',
+                    color: activationMode === 'CO_TERM' ? '#FF7A00' : '#475569',
                     fontSize: 12,
                     fontWeight: 800,
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    boxShadow: activationMode === 'CO_TERM' ? '0 2px 6px rgba(255,122,0,0.15)' : 'none'
                   }}
                 >
-                  {p.label}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <FiZap size={14} />
+                    <span>⚡ Add-On Co-Terming</span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 500, marginTop: 4 }}>
+                    Align add-ons to current expiry ({remainingDays} days left). Base POS = ₹0.
+                  </div>
                 </button>
-              ))}
-            </div>
 
+                <button
+                  type="button"
+                  onClick={() => { setActivationMode('EXTEND'); setIsAmountManuallyEdited(false) }}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    border: `1.5px solid ${activationMode === 'EXTEND' ? '#FF7A00' : '#E2E8F0'}`,
+                    background: activationMode === 'EXTEND' ? '#FFFFFF' : '#F8FAFC',
+                    color: activationMode === 'EXTEND' ? '#FF7A00' : '#475569',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    boxShadow: activationMode === 'EXTEND' ? '0 2px 6px rgba(255,122,0,0.15)' : 'none'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <FiCalendar size={14} />
+                    <span>🔄 Full Renewal / Extension</span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 500, marginTop: 4 }}>
+                    Add {daysToAdd} days to subscription. Includes Base POS + Modules.
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Duration Presets (Only in EXTEND mode or when not currently active) */}
+          {(activationMode === 'EXTEND' || !isCurrentlyActive) && (
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 8 }}>
+                Extend Expiry Duration
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 10 }}>
+                {[
+                  { days: 365, label: '365 Days (1 Yr)' },
+                  { days: 180, label: '180 Days (Half-Yr)' },
+                  { days: 90, label: '90 Days (Quarterly)' },
+                  { days: 730, label: '730 Days (2 Years)' },
+                ].map(p => (
+                  <button
+                    key={p.days}
+                    type="button"
+                    onClick={() => { setDaysToAdd(p.days); setIsAmountManuallyEdited(false) }}
+                    style={{
+                      padding: '9px 12px',
+                      borderRadius: 10,
+                      border: `1.5px solid ${daysToAdd === p.days ? '#FF7A00' : '#E2E8F0'}`,
+                      background: daysToAdd === p.days ? '#FFF3E8' : '#FFFFFF',
+                      color: daysToAdd === p.days ? '#FF7A00' : '#475569',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12, color: '#64748B' }}>Custom Days:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="3650"
+                  value={daysToAdd}
+                  onChange={e => { setDaysToAdd(e.target.value); setIsAmountManuallyEdited(false) }}
+                  style={{
+                    width: 90,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    border: '1.5px solid #CBD5E1',
+                    fontSize: 13,
+                    fontWeight: 700
+                  }}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#334155', cursor: 'pointer', marginLeft: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeBasePos}
+                    onChange={e => { setIncludeBasePos(e.target.checked); setIsAmountManuallyEdited(false) }}
+                    style={{ accentColor: '#FF7A00' }}
+                  />
+                  <span>Include Base POS License (₹{Math.round((BASE_POS_ANNUAL_PRICE * effectiveDays) / 365)})</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Setup Charge Toggle Box */}
+          <div
+            onClick={() => { setIncludeSetupCharge(!includeSetupCharge); setIsAmountManuallyEdited(false) }}
+            style={{
+              background: includeSetupCharge ? '#FFF8F0' : '#F8FAFC',
+              border: `1.5px solid ${includeSetupCharge ? '#FF7A00' : '#E2E8F0'}`,
+              borderRadius: 12,
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer'
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 12, color: '#64748B' }}>Custom Days:</span>
               <input
-                type="number"
-                min="1"
-                max="3650"
-                value={daysToAdd}
-                onChange={e => setDaysToAdd(e.target.value)}
-                style={{
-                  width: 90,
-                  padding: '6px 10px',
-                  borderRadius: 8,
-                  border: '1.5px solid #CBD5E1',
-                  fontSize: 13,
-                  fontWeight: 700
-                }}
+                type="checkbox"
+                checked={includeSetupCharge}
+                onChange={e => { setIncludeSetupCharge(e.target.checked); setIsAmountManuallyEdited(false) }}
+                onClick={e => e.stopPropagation()}
+                style={{ width: 16, height: 16, accentColor: '#FF7A00', cursor: 'pointer' }}
               />
-              <span style={{ fontSize: 12, color: '#10B981', fontWeight: 700 }}>
-                Status: ACTIVE (Paid License)
-              </span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>
+                  One-Time Branch Setup Charge (+₹1,499)
+                </div>
+                <div style={{ fontSize: 11, color: '#64748B' }}>
+                  Mandatory for new client on-boardings. Leave unchecked to waive for grandfathered old clients.
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 900, color: includeSetupCharge ? '#FF7A00' : '#94A3B8' }}>
+              {includeSetupCharge ? '+₹1,499' : 'Waived (₹0)'}
             </div>
           </div>
 
@@ -352,7 +537,7 @@ export default function BranchActivationModal({
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
-                Active Add-On Modules & Exact Pricing
+                Active Add-On Modules & Prorated Pricing ({effectiveDays} Days)
               </label>
               <button
                 type="button"
@@ -374,6 +559,7 @@ export default function BranchActivationModal({
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
               {ALL_MODULES.map(mod => {
                 const isChecked = selectedModules.includes(mod.key)
+                const proratedPrice = Math.round((mod.priceAnnual * effectiveDays) / 365)
                 return (
                   <div
                     key={mod.key}
@@ -416,7 +602,9 @@ export default function BranchActivationModal({
                           fontWeight: 800,
                           color: mod.priceAnnual > 0 ? '#10B981' : '#64748B'
                         }}>
-                          {mod.priceAnnual > 0 ? `₹${mod.priceAnnual.toLocaleString('en-IN')}/yr` : 'Included'}
+                          {mod.priceAnnual > 0 ? (
+                            effectiveDays === 365 ? `₹${mod.priceAnnual}/yr` : `₹${proratedPrice} (${effectiveDays}d)`
+                          ) : 'Included'}
                         </span>
                       </div>
                       <div style={{ fontSize: 10.5, color: '#94A3B8', marginTop: 2 }}>
@@ -439,17 +627,18 @@ export default function BranchActivationModal({
             flexDirection: 'column',
             gap: 14
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
-                  Standard Annual Contract Value
+                  Standard Calculated Total ({effectiveDays} Days {activationMode === 'CO_TERM' && isCurrentlyActive ? 'Co-Term' : 'Period'})
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', fontFamily: 'Outfit, sans-serif' }}>
-                  ₹{calculatedStandardTotal.toLocaleString('en-IN')} <span style={{ fontSize: 12, color: '#64748B', fontWeight: 600 }}>/ year</span>
+                <div style={{ fontSize: 20, fontWeight: 900, color: '#0F172A', fontFamily: 'Outfit, sans-serif' }}>
+                  ₹{calculatedStandardTotal.toLocaleString('en-IN')}
                 </div>
               </div>
-              <div style={{ textAlign: 'right', fontSize: 11, color: '#64748B' }}>
-                <div>Base POS: <strong>₹{BASE_POS_ANNUAL_PRICE}</strong></div>
+              <div style={{ textAlign: 'right', fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+                {includeSetupCharge && <div>Setup Charge: <strong>₹{calculatedSetupPrice}</strong></div>}
+                <div>Base POS ({effectiveDays}d): <strong>₹{calculatedBasePrice}</strong></div>
                 <div>Add-ons ({selectedModules.length}): <strong>₹{calculatedModulesTotal}</strong></div>
               </div>
             </div>
@@ -462,15 +651,29 @@ export default function BranchActivationModal({
                 onChange={e => setRecordPayment(e.target.checked)}
                 style={{ width: 16, height: 16, accentColor: '#FF7A00' }}
               />
-              <span>💰 Record Payment in Ledger (Audit Trail & Accurate Revenue)</span>
+              <span>💰 Record Payment in Ledger (Immediate Revenue Reflection)</span>
             </label>
 
             {recordPayment && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, paddingTop: 4 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                    Amount Collected (₹)
-                  </label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>
+                      Amount Collected (₹)
+                    </label>
+                    {isAmountManuallyEdited && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaymentAmount(calculatedStandardTotal)
+                          setIsAmountManuallyEdited(false)
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#FF7A00', fontSize: 10, fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                      >
+                        Reset to ₹{calculatedStandardTotal}
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="number"
                     min="0"
@@ -485,7 +688,7 @@ export default function BranchActivationModal({
                       padding: '8px 12px',
                       borderRadius: 8,
                       border: '1.5px solid #CBD5E1',
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: 800,
                       color: '#0F172A',
                       background: '#FFFFFF'
@@ -525,7 +728,7 @@ export default function BranchActivationModal({
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. UPI Ref #493821039, Cheque #01923, or custom package note"
+                    placeholder="e.g. GPay UPI Ref #94820184, Cash collected at restaurant, or waiver reason"
                     value={paymentNotes}
                     onChange={e => setPaymentNotes(e.target.value)}
                     style={{

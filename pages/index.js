@@ -286,9 +286,11 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
   const uniqueModules = useMemo(() => {
     const map = {}
     ;(client.subscriptionModules || []).forEach(m => {
-      const existing = map[m.moduleName]
+      // Composite key: moduleName + orgId to preserve branch-scoped modules
+      const key = `${m.moduleName}_${m.orgId || 'tenant'}`
+      const existing = map[key]
       if (!existing || m.status === 'ACTIVE' || (existing.status !== 'ACTIVE' && m.status !== 'EXPIRED')) {
-        map[m.moduleName] = m
+        map[key] = m
       }
     })
     return Object.values(map).sort((a, b) => a.moduleName.localeCompare(b.moduleName))
@@ -594,16 +596,30 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                               background: '#F8FAFC',
                               border: '1px solid #E2E8F0',
                               borderRadius: 10,
-                              padding: '8px 12px',
+                              padding: '10px 12px',
                               display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
+                              flexDirection: 'column',
+                              gap: 4,
                               fontSize: 12
                             }}>
-                              <span style={{ color: '#64748B', fontWeight: 600 }}>Branch Revenue:</span>
-                              <span style={{ fontWeight: 800, color: T.green }}>
-                                {fmtRupees(b.totalPaidPaise || 0)} <span style={{ fontSize: 10.5, color: '#94A3B8', fontWeight: 600 }}>({b.paymentCount || 0} txn)</span>
-                              </span>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ color: '#64748B', fontWeight: 600 }}>Branch Revenue:</span>
+                                <span style={{ fontWeight: 800, color: T.green }}>
+                                  {fmtRupees(b.totalPaidPaise || 0)} <span style={{ fontSize: 10.5, color: '#94A3B8', fontWeight: 600 }}>({b.paymentCount || 0} txn)</span>
+                                </span>
+                              </div>
+                              {(b.expectedTermValuePaise > 0) && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ color: '#64748B', fontWeight: 600 }}>Expected Value:</span>
+                                  <span style={{ fontWeight: 700, color: '#475569' }}>{fmtRupees(b.expectedTermValuePaise || 0)}</span>
+                                </div>
+                              )}
+                              {(b.unbilledVariancePaise > 0) && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFF7ED', borderRadius: 6, padding: '3px 8px', marginTop: 2 }}>
+                                  <span style={{ color: '#C2410C', fontWeight: 700, fontSize: 11 }}>⚠ Unbilled:</span>
+                                  <span style={{ fontWeight: 800, color: '#EA580C', fontSize: 11 }}>{fmtRupees(b.unbilledVariancePaise)}</span>
+                                </div>
+                              )}
                             </div>
 
                             {/* Actions */}
@@ -662,7 +678,7 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                         {uniqueModules.map(m => {
                           const mc = getModuleColor(m.moduleName)
                           return (
-                            <div key={m.moduleName} style={{ 
+                            <div key={`${m.moduleName}_${m.orgId || 'tenant'}`} style={{ 
                               background: T.bgWhite, 
                               border: `1px solid ${T.border}`,
                               borderLeft: `4px solid ${mc.color}`,
@@ -674,6 +690,13 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                                 <span style={{ color: T.textMain, fontWeight: 700, fontSize: 13, fontFamily: 'Outfit, sans-serif' }}>{m.moduleName.replace(/_/g, ' ')}</span>
                                 <StatusBadge status={m.status} />
                               </div>
+                              {m.branchName && (
+                                <div style={{ fontSize: 10.5, color: '#64748B', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ background: '#FFF3E8', color: '#FF7A00', border: '1px solid #FFD8B3', borderRadius: 4, padding: '1px 5px', fontSize: 9.5, fontWeight: 700 }}>
+                                    {m.branchName}
+                                  </span>
+                                </div>
+                              )}
                               <div style={{ fontSize: 11, color: T.textMuted }}>Expires: {fmtDate(m.expiryDate)}</div>
                               <div style={{ fontSize: 11, color: T.textSub, marginTop: 4 }}>Auto-renew: {m.autoRenew ? 'Yes' : 'No'}</div>
                             </div>
