@@ -25,7 +25,8 @@ const STAGES = [
   { key: 'DEMO_SCHEDULED', label: '📅 Demo Scheduled', color: '#EC4899', bg: '#FDF2F8', border: '#FBCFE8', desc: 'Live walkthrough booked' },
   { key: 'ONBOARDED_TRIAL', label: '⏳ Trial Account', color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A', desc: 'Exploring free trial' },
   { key: 'PAID_ACTIVE', label: '💳 Paid & Active', color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0', desc: 'Paid subscriber or activated' },
-  { key: 'COLD_FOLLOW_UP', label: '❄️ Cold Follow-Up', color: '#64748B', bg: '#F8FAFC', border: '#E2E8F0', desc: 'Nurture later / deferred' },
+  { key: 'EXISTING_RETAINED', label: '👑 Retained Account', color: '#059669', bg: '#F0FDF4', border: '#86EFAC', desc: 'Healthy retained merchant' },
+  { key: 'AT_RISK_RENEWAL', label: '⚠️ At Risk / Renewal', color: '#E11D48', bg: '#FFF1F2', border: '#FECDD3', desc: 'Expiring soon or inactive' },
   { key: 'LOST', label: '❌ Lost / Dropped', color: '#EF4444', bg: '#FEF2F2', border: '#FECACA', desc: 'Competitor / closed' },
 ]
 
@@ -40,7 +41,8 @@ export default function PipelineBoard({
   onSaveLead,
   onDeleteLead,
   onUpdateLeadStatus,
-  onLogActivity
+  onLogActivity,
+  onInspectStore
 }) {
   const [activeSubView, setActiveSubView] = useState('kanban') // 'kanban' | 'dialer'
   const [mobileActiveStage, setMobileActiveStage] = useState('YET_TO_REACH_OUT')
@@ -79,6 +81,7 @@ export default function PipelineBoard({
     for (const l of filteredLeads) {
       const st = l.status || 'YET_TO_REACH_OUT'
       if (groups[st]) groups[st].push(l)
+      else if (st === 'COLD_FOLLOW_UP') groups['YET_TO_REACH_OUT'].push(l)
       else groups['YET_TO_REACH_OUT'].push(l)
     }
     return groups
@@ -88,18 +91,20 @@ export default function PipelineBoard({
   const metrics = useMemo(() => {
     const totalCount = leads.length
     const coldPoolCount = (stageGroups['YET_TO_REACH_OUT'] || []).length
-    const activePipelineCount = leads.filter(l => !['PAID_ACTIVE', 'LOST'].includes(l.status)).length
+    const activePipelineCount = leads.filter(l => !['PAID_ACTIVE', 'EXISTING_RETAINED', 'LOST'].includes(l.status)).length
     const totalPipelineValuePaise = leads
       .filter(l => !['LOST'].includes(l.status))
       .reduce((sum, l) => sum + (l.dealValueEstimatePaise || 0), 0)
-    const paidCount = (stageGroups['PAID_ACTIVE'] || []).length
+    const paidCount = (stageGroups['PAID_ACTIVE'] || []).length + (stageGroups['EXISTING_RETAINED'] || []).length
+    const atRiskCount = (stageGroups['AT_RISK_RENEWAL'] || []).length
 
     return {
       totalCount,
       coldPoolCount,
       activePipelineCount,
       totalPipelineValuePaise,
-      paidCount
+      paidCount,
+      atRiskCount
     }
   }, [leads, stageGroups])
 
@@ -211,20 +216,64 @@ export default function PipelineBoard({
           </div>
         )}
 
-        {/* Matched Branch tag if exists */}
-        {lead.matchedBranchName && (
-          <div style={{ fontSize: 10.5, color: '#0284C7', background: '#F0F9FF', padding: '2px 6px', borderRadius: 6, display: 'inline-block' }}>
-            Linked: {lead.matchedBranchName} ({lead.matchedSubscriptionStatus || 'UNPAID'})
+        {/* Branch Link & Module Badges */}
+        {(lead.matchedBranchName || lead.matchedBranchCode) && (
+          <div style={{
+            background: '#F0F9FF',
+            border: '1px solid #BAE6FD',
+            borderRadius: 8,
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10.5 }}>
+              <span style={{ fontWeight: 800, color: '#0369A1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '65%' }}>
+                📍 {lead.matchedBranchName || 'Main'} <span style={{ color: '#0284C7', fontWeight: 600 }}>[{lead.matchedBranchCode || 'HQ'}]</span>
+              </span>
+              <span style={{
+                fontWeight: 800,
+                fontSize: 9.5,
+                padding: '1px 5px',
+                borderRadius: 4,
+                background: lead.matchedSubscriptionStatus === 'ACTIVE' ? '#DCFCE7' : '#FEF3C7',
+                color: lead.matchedSubscriptionStatus === 'ACTIVE' ? '#15803D' : '#B45309'
+              }}>
+                {lead.matchedSubscriptionStatus || 'UNPAID'}
+                {lead.matchedDaysLeft != null && ` (${lead.matchedDaysLeft}d)`}
+              </span>
+            </div>
+
+            {/* Active Modules Badges */}
+            {lead.matchedActiveModules && lead.matchedActiveModules.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2 }}>
+                {lead.matchedActiveModules.map(mod => (
+                  <span
+                    key={mod}
+                    style={{
+                      fontSize: 8.5,
+                      fontWeight: 700,
+                      background: '#E0F2FE',
+                      color: '#0369A1',
+                      borderRadius: 3,
+                      padding: '1px 4px'
+                    }}
+                  >
+                    {mod}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* Actions Row */}
         <div
           onClick={e => e.stopPropagation()}
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #F1F5F9', paddingTop: 8, marginTop: 2 }}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #F1F5F9', paddingTop: 8, marginTop: 2, flexWrap: 'wrap', gap: 6 }}
         >
           {/* Quick Call & WA */}
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <a
               href={`tel:${cleanPhone}`}
               onClick={() => onLogActivity && onLogActivity(lead.id, 'CALL', 'Outbound phone call clicked')}
@@ -264,6 +313,68 @@ export default function PipelineBoard({
             >
               <FiMessageSquare size={13} />
             </a>
+
+            {/* 1-Click Activate / Modules button */}
+            {lead.matchedClientId && (
+              <button
+                type="button"
+                title="1-Click Branch & Modules Activation"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  openActivationForBranch({
+                    id: lead.matchedOrgId || lead.assignedOrgId,
+                    name: lead.matchedBranchName || lead.businessName,
+                    branchCode: lead.matchedBranchCode,
+                    clientId: lead.matchedClientId,
+                    modules: lead.matchedActiveModules || []
+                  })
+                }}
+                style={{
+                  height: 28,
+                  padding: '0 7px',
+                  borderRadius: 8,
+                  background: '#FFF3E8',
+                  border: '1px solid #FED7AA',
+                  color: '#EA580C',
+                  fontSize: 10.5,
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  cursor: 'pointer'
+                }}
+              >
+                <FiZap size={11} />
+                <span>Modules</span>
+              </button>
+            )}
+
+            {/* 1-Click Ghost Inspect Store */}
+            {onInspectStore && lead.matchedClientId && (
+              <button
+                type="button"
+                title="Ghost Inspect Merchant POS"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  const client = allClients.find(c => c.id === lead.matchedClientId) || { id: lead.matchedClientId, name: lead.matchedBranchName || lead.businessName }
+                  onInspectStore(client)
+                }}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 8,
+                  background: '#F1F5F9',
+                  border: '1px solid #CBD5E1',
+                  color: '#475569',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer'
+                }}
+              >
+                <FiUser size={13} />
+              </button>
+            )}
           </div>
 
           {/* Quick Move Stage Dropdown */}
@@ -279,7 +390,7 @@ export default function PipelineBoard({
               background: '#F8FAFC',
               color: '#334155',
               outline: 'none',
-              maxWidth: 130
+              maxWidth: 125
             }}
           >
             {STAGES.map(s => (
@@ -312,10 +423,18 @@ export default function PipelineBoard({
         </div>
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #10B981', borderRadius: 12, padding: '12px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: 10, fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Paid Merchants</div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Paid & Retained</div>
           <div style={{ fontSize: 24, fontWeight: 900, color: '#0F172A', fontFamily: 'Outfit, sans-serif' }}>{metrics.paidCount}</div>
-          <div style={{ fontSize: 11, color: '#10B981', fontWeight: 600 }}>Active subscriptions</div>
+          <div style={{ fontSize: 11, color: '#10B981', fontWeight: 600 }}>Active subscribers</div>
         </div>
+
+        {metrics.atRiskCount > 0 && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #FECDD3', borderLeft: '4px solid #E11D48', borderRadius: 12, padding: '12px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#E11D48', textTransform: 'uppercase' }}>At Risk / Renewals</div>
+            <div style={{ fontSize: 24, fontWeight: 900, color: '#E11D48', fontFamily: 'Outfit, sans-serif' }}>{metrics.atRiskCount}</div>
+            <div style={{ fontSize: 11, color: '#E11D48', fontWeight: 600 }}>Action needed</div>
+          </div>
+        )}
 
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #FF7A00', borderRadius: 12, padding: '12px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
           <div style={{ fontSize: 10, fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Pipeline Value</div>

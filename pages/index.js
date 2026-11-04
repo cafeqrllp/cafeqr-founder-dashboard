@@ -157,33 +157,73 @@ function PaymentHistoryTable({ client, payments, onPrint }) {
       <table className="founder-tbl">
         <thead>
           <tr>
-            {['Date', 'Payment ID', 'Order ID', 'Amount', 'Action'].map(h =>
+            {['Date', 'Invoice ID', 'Target Branch', 'Modules / Remarks', 'Mode', 'Status', 'Amount', 'Action'].map(h =>
               <th key={h} style={{ textAlign: h === 'Amount' ? 'right' : 'left', textTransform: 'uppercase' }}>{h}</th>
             )}
           </tr>
         </thead>
         <tbody>
-          {payments.map(p => (
-            <tr key={p.id}>
-              <td style={{ color: T.textSub }}>{fmtDateTime(p.createdAt)}</td>
-              <td style={{ color: T.blue, fontFamily: 'monospace', fontSize: 12 }}>{p.paymentId}</td>
-              <td style={{ color: T.textMuted, fontFamily: 'monospace', fontSize: 12 }}>{p.orderId}</td>
-              <td style={{ color: T.green, fontWeight: 700, textAlign: 'right' }}>{fmtRupees(p.amount)}</td>
-              <td style={{ textAlign: 'left' }}>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); onPrint(client, p) }} 
-                  style={{
-                    background: 'none', border: 'none', color: T.primary,
-                    fontWeight: 700, cursor: 'pointer', fontSize: 11,
-                    textTransform: 'uppercase', letterSpacing: '0.5px',
-                    fontFamily: 'Outfit, sans-serif', padding: 0
-                  }}
-                >
-                  Print Receipt
-                </button>
-              </td>
-            </tr>
-          ))}
+          {payments.map(p => {
+            const isPending = p.status === 'PENDING'
+            const methodLabel = (p.paymentMethod || 'MANUAL').replace(/_/g, ' ')
+            const branchLabel = p.branchName ? `${p.branchName} [${p.branchCode || 'HQ'}]` : (client.primaryBranchName ? `${client.primaryBranchName} [HQ]` : 'All Outlets')
+            return (
+              <tr key={p.id}>
+                <td style={{ color: T.textSub, whiteSpace: 'nowrap' }}>{fmtDateTime(p.createdAt)}</td>
+                <td style={{ color: T.blue, fontFamily: 'monospace', fontSize: 12, fontWeight: 700 }}>{p.paymentId}</td>
+                <td style={{ color: T.textMain, fontWeight: 600, fontSize: 12.5 }}>
+                  <span style={{ background: '#F1F5F9', padding: '2px 8px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                    {branchLabel}
+                  </span>
+                </td>
+                <td style={{ color: T.textSub, fontSize: 12, maxWidth: 220 }}>
+                  <div style={{ fontWeight: 600, color: '#0F172A' }}>{p.description || 'Base POS License'}</div>
+                </td>
+                <td>
+                  <span style={{
+                    background: p.paymentMethod === 'PENDING_INVOICE' ? '#FEF3C7' : '#F1F5F9',
+                    color: p.paymentMethod === 'PENDING_INVOICE' ? '#92400E' : '#334155',
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: '0.03em'
+                  }}>
+                    {methodLabel}
+                  </span>
+                </td>
+                <td>
+                  <span style={{
+                    background: isPending ? '#FEF2F2' : '#ECFDF5',
+                    color: isPending ? '#DC2626' : '#059669',
+                    border: `1px solid ${isPending ? '#FCA5A5' : '#A7F3D0'}`,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: 10.5,
+                    fontWeight: 800
+                  }}>
+                    {isPending ? 'PENDING' : 'PAID'}
+                  </span>
+                </td>
+                <td style={{ color: isPending ? T.red : T.green, fontWeight: 800, textAlign: 'right', fontSize: 13.5 }}>
+                  {fmtRupees(p.amount)}
+                </td>
+                <td style={{ textAlign: 'left' }}>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); onPrint(client, p) }} 
+                    style={{
+                      background: 'none', border: 'none', color: T.primary,
+                      fontWeight: 700, cursor: 'pointer', fontSize: 11,
+                      textTransform: 'uppercase', letterSpacing: '0.5px',
+                      fontFamily: 'Outfit, sans-serif', padding: 0
+                    }}
+                  >
+                    Print Receipt
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -246,9 +286,11 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
   const uniqueModules = useMemo(() => {
     const map = {}
     ;(client.subscriptionModules || []).forEach(m => {
-      const existing = map[m.moduleName]
+      // Composite key: moduleName + orgId to preserve branch-scoped modules
+      const key = `${m.moduleName}_${m.orgId || 'tenant'}`
+      const existing = map[key]
       if (!existing || m.status === 'ACTIVE' || (existing.status !== 'ACTIVE' && m.status !== 'EXPIRED')) {
-        map[m.moduleName] = m
+        map[key] = m
       }
     })
     return Object.values(map).sort((a, b) => a.moduleName.localeCompare(b.moduleName))
@@ -328,10 +370,30 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
 
         {/* Revenue */}
         <td style={{ padding: '12px 18px', textAlign: 'right' }}>
-          <div style={{ color: T.green, fontWeight: 700, fontSize: 14, fontFamily: 'Outfit, sans-serif' }}>
+          <div style={{ color: T.green, fontWeight: 800, fontSize: 14, fontFamily: 'Outfit, sans-serif' }}>
             {fmtRupees(client.totalPaidPaise)}
           </div>
-          <div style={{ color: T.textMuted, fontSize: 11, marginTop: 1 }}>{client.paymentCount} payment{client.paymentCount !== 1 ? 's' : ''}</div>
+          <div style={{ color: T.textMuted, fontSize: 11, marginTop: 1 }}>
+            {client.paymentCount} payment{client.paymentCount !== 1 ? 's' : ''}
+          </div>
+          {client.contractedArrPaise > client.totalPaidPaise && (
+            <div style={{ marginTop: 4, display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+              <span style={{ fontSize: 10, color: '#475569', fontWeight: 600 }}>
+                Value: <strong style={{ color: '#0F172A' }}>{fmtRupees(client.contractedArrPaise)}/yr</strong>
+              </span>
+              <span style={{
+                fontSize: 9.5,
+                fontWeight: 800,
+                color: '#C2410C',
+                background: '#FFF7ED',
+                border: '1px solid #FFEDD5',
+                borderRadius: 4,
+                padding: '1px 5px'
+              }}>
+                ⚠ {fmtRupees(client.unbilledVariancePaise)} unbilled
+              </span>
+            </div>
+          )}
         </td>
 
         {/* Quick Actions & Expand Toggle */}
@@ -497,7 +559,9 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                           subscriptionStatus: client.effectiveSubscriptionStatus || client.subscriptionStatus,
                           subscriptionExpiryDate: client.effectiveExpiryDate || client.subscriptionExpiryDate,
                           daysLeft: client.effectiveDaysLeft || client.daysLeft,
-                          modules: client.subscriptionModules || []
+                          modules: client.subscriptionModules || [],
+                          totalPaidPaise: client.totalPaidPaise || 0,
+                          paymentCount: client.paymentCount || 0
                         }]).map(b => (
                           <div key={b.id || b.branchCode} style={{
                             background: T.bgWhite,
@@ -506,46 +570,120 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                             padding: '16px',
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: 10,
+                            gap: 12,
                             boxShadow: T.shadow
                           }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                               <div>
-                                <div style={{ fontSize: 14, fontWeight: 800, color: T.textMain }}>{b.name || 'Main Branch'}</div>
-                                <div style={{ fontSize: 11, color: T.textMuted }}>Branch Code: <strong>{b.branchCode || 'HQ'}</strong></div>
+                                <div style={{ fontSize: 14.5, fontWeight: 800, color: T.textMain, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span>{b.name || 'Main Branch'}</span>
+                                  <span style={{ background: '#FFF3E8', color: '#FF7A00', border: '1px solid #FFD8B3', borderRadius: 6, padding: '1px 6px', fontSize: 10, fontWeight: 800 }}>
+                                    {b.branchCode || 'HQ'}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>Branch ID: <code style={{ fontSize: 10 }}>{(b.id || '').slice(0, 8)}...</code></div>
                               </div>
                               <StatusBadge status={b.subscriptionStatus} />
                             </div>
 
-                            <div style={{ fontSize: 12, color: T.textSub }}>
-                              <div>📞 {b.phone || 'No phone'}</div>
+                            <div style={{ fontSize: 12, color: T.textSub, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                              <div>📞 {b.phone || 'No direct phone'}</div>
                               {b.whatsappNumber && <div>💬 WA: {b.whatsappNumber}</div>}
                               {b.address && <div>📍 {b.address}</div>}
-                              <div style={{ marginTop: 4, fontWeight: 600 }}>
-                                Expiry: {fmtDate(b.subscriptionExpiryDate)} {b.daysLeft > 0 ? `(${b.daysLeft}d left)` : ''}
+                              <div style={{ marginTop: 2, fontWeight: 700, color: '#0F172A' }}>
+                                License Expiry: <span style={{ color: b.daysLeft > 0 ? T.green : T.red }}>{fmtDate(b.subscriptionExpiryDate)}</span> {b.daysLeft > 0 ? `(${b.daysLeft}d left)` : ''}
                               </div>
                             </div>
 
-                            <button
-                              onClick={(e) => { e.stopPropagation(); onOpenBranchActivation({ id: b.id, name: b.name, modules: b.modules }) }}
-                              style={{
-                                marginTop: 'auto',
-                                padding: '8px 12px',
-                                borderRadius: 8,
-                                border: 'none',
-                                background: 'linear-gradient(135deg, #10B981, #059669)',
-                                color: '#FFFFFF',
-                                fontSize: 12,
-                                fontWeight: 800,
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: 6
-                              }}
-                            >
-                              ⚡ Activate This Branch
-                            </button>
+                            {/* Branch Active Modules */}
+                            <div>
+                              <div style={{ fontSize: 10.5, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: 4 }}>
+                                Branch Active Add-Ons
+                              </div>
+                              {b.modules && b.modules.length > 0 ? (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                  {b.modules.map(m => (
+                                    <ModulePill key={typeof m === 'string' ? m : m.moduleName} name={typeof m === 'string' ? m : m.moduleName} />
+                                  ))}
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: 11, color: T.textMuted }}>Base POS only (no add-on modules)</span>
+                              )}
+                            </div>
+
+                            {/* Branch Revenue Breakdown */}
+                            <div style={{
+                              background: '#F8FAFC',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: 10,
+                              padding: '10px 12px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                              fontSize: 12
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ color: '#64748B', fontWeight: 600 }}>Branch Revenue:</span>
+                                <span style={{ fontWeight: 800, color: T.green }}>
+                                  {fmtRupees(b.totalPaidPaise || 0)} <span style={{ fontSize: 10.5, color: '#94A3B8', fontWeight: 600 }}>({b.paymentCount || 0} txn)</span>
+                                </span>
+                              </div>
+                              {(b.expectedTermValuePaise > 0) && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ color: '#64748B', fontWeight: 600 }}>Expected Value:</span>
+                                  <span style={{ fontWeight: 700, color: '#475569' }}>{fmtRupees(b.expectedTermValuePaise || 0)}</span>
+                                </div>
+                              )}
+                              {(b.unbilledVariancePaise > 0) && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFF7ED', borderRadius: 6, padding: '3px 8px', marginTop: 2 }}>
+                                  <span style={{ color: '#C2410C', fontWeight: 700, fontSize: 11 }}>⚠ Unbilled:</span>
+                                  <span style={{ fontWeight: 800, color: '#EA580C', fontSize: 11 }}>{fmtRupees(b.unbilledVariancePaise)}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Actions */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 'auto' }}>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onOpenBranchActivation({ id: b.id, name: b.name, branchCode: b.branchCode, clientId: client.id, modules: b.modules }) }}
+                                style={{
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  border: 'none',
+                                  background: 'linear-gradient(135deg, #FF7A00, #FF4D00)',
+                                  color: '#FFFFFF',
+                                  fontSize: 11.5,
+                                  fontWeight: 800,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 4
+                                }}
+                              >
+                                ⚡ Activate Branch
+                              </button>
+
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onInspectStore(client) }}
+                                style={{
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  border: '1px solid #CBD5E1',
+                                  background: '#FFFFFF',
+                                  color: '#334155',
+                                  fontSize: 11.5,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 4
+                                }}
+                              >
+                                👁️ Ghost POS
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -560,7 +698,7 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                         {uniqueModules.map(m => {
                           const mc = getModuleColor(m.moduleName)
                           return (
-                            <div key={m.moduleName} style={{ 
+                            <div key={`${m.moduleName}_${m.orgId || 'tenant'}`} style={{ 
                               background: T.bgWhite, 
                               border: `1px solid ${T.border}`,
                               borderLeft: `4px solid ${mc.color}`,
@@ -572,6 +710,13 @@ function ClientRow({ client, index, onToggleActive, onOpenExtendModal, onOpenPay
                                 <span style={{ color: T.textMain, fontWeight: 700, fontSize: 13, fontFamily: 'Outfit, sans-serif' }}>{m.moduleName.replace(/_/g, ' ')}</span>
                                 <StatusBadge status={m.status} />
                               </div>
+                              {m.branchName && (
+                                <div style={{ fontSize: 10.5, color: '#64748B', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ background: '#FFF3E8', color: '#FF7A00', border: '1px solid #FFD8B3', borderRadius: 4, padding: '1px 5px', fontSize: 9.5, fontWeight: 700 }}>
+                                    {m.branchName}
+                                  </span>
+                                </div>
+                              )}
                               <div style={{ fontSize: 11, color: T.textMuted }}>Expires: {fmtDate(m.expiryDate)}</div>
                               <div style={{ fontSize: 11, color: T.textSub, marginTop: 4 }}>Auto-renew: {m.autoRenew ? 'Yes' : 'No'}</div>
                             </div>
@@ -611,7 +756,7 @@ function OnboardingFunnelView({ clients, onNudgeWhatsApp, onInspectStore }) {
   const stage3 = clients.filter(c => (c.menuItemsCount || 0) >= 3).length
   const stage4 = clients.filter(c => (c.tablesCount || 0) >= 1).length
   const stage5 = clients.filter(c => (c.orderCount || 0) >= 1).length
-  const stage6 = clients.filter(c => (c.subscriptionStatus || '').toUpperCase() === 'ACTIVE' && c.totalPaidPaise > 0).length
+  const stage6 = clients.filter(c => ((c.effectiveSubscriptionStatus || c.subscriptionStatus || '').toUpperCase() === 'ACTIVE')).length
 
   const stages = [
     { title: '1. Registered Signups', count: stage1, desc: 'All registered accounts', color: T.blue },
@@ -1174,6 +1319,9 @@ function Dashboard({ founderKey }) {
   const [payAmount, setPayAmount] = useState('')
   const [payId, setPayId] = useState('')
   const [payOrderId, setPayOrderId] = useState('')
+  const [payOrgId, setPayOrgId] = useState('')
+  const [payMethod, setPayMethod] = useState('UPI')
+  const [payDesc, setPayDesc] = useState('')
   const [payLoading, setPayLoading] = useState(false)
 
   // Sales CRM States
@@ -1431,7 +1579,11 @@ function Dashboard({ founderKey }) {
     setPayLoading(true)
     try {
       await axios.post(`${API_BASE}/api/v1/founder/client/${paymentModalClient.id}/record-payment`, {
-        amountPaise: Math.round(amountFloat * 100)
+        amountPaise: Math.round(amountFloat * 100),
+        orgId: payOrgId || paymentModalClient.primaryOrgId || null,
+        paymentMethod: payMethod || 'UPI',
+        description: payDesc || 'Manual payment recorded via Founder Dashboard',
+        status: payMethod === 'PENDING_INVOICE' ? 'PENDING' : 'PAID'
       }, {
         headers: { 'X-Founder-Key': founderKey }
       })
@@ -1440,6 +1592,9 @@ function Dashboard({ founderKey }) {
       setPayAmount('')
       setPayId('')
       setPayOrderId('')
+      setPayOrgId('')
+      setPayMethod('UPI')
+      setPayDesc('')
       fetchData()
     } catch (err) {
       alert('Error: ' + (err.response?.data?.message || err.message))
@@ -1604,10 +1759,10 @@ function Dashboard({ founderKey }) {
                 <StatCard label="Trial"          value={data.stats.trialClients}                  sub="Free trial"      accent={T.orange} onClick={() => setStatusFilter('TRIAL')} />
                 <StatCard label="Expired"        value={data.stats.expiredClients}                sub="Need renewal"    accent={T.red}    onClick={() => setStatusFilter('EXPIRED')} />
                 <StatCard label="Unpaid"         value={data.stats.unpaidClients}                 sub="Never paid"      accent="#94A3B8"  onClick={() => setStatusFilter('UNPAID')} />
-                <StatCard label="Active MRR"     value={data.stats.mrrPaise ? fmtRupees(data.stats.mrrPaise) : '₹0'} sub="Monthly run-rate" accent={T.green} />
-                <StatCard label="Run-Rate ARR"   value={fmtRupees((data.stats.mrrPaise || 0) * 12)} sub="Annualized run-rate" accent={T.primary} />
-                <StatCard label="ARPU"           value={fmtRupees(data.stats.arpuPaise || 0)}     sub="Avg / paid client" accent={T.blue} />
-                <StatCard label="Realized Cash"  value={fmtRupees(data.stats.totalRevenuePaise)}  sub="All time collections" accent={T.green} />
+                <StatCard label="Contracted MRR" value={data.stats.contractedMrrPaise ? fmtRupees(data.stats.contractedMrrPaise) : (data.stats.mrrPaise ? fmtRupees(data.stats.mrrPaise) : '₹0')} sub="All active modules/branches" accent={T.green} />
+                <StatCard label="Contracted ARR" value={fmtRupees(data.stats.contractedArrPaise || (data.stats.mrrPaise || 0) * 12)} sub="Annual software run-rate" accent={T.primary} />
+                <StatCard label="Unbilled Variance" value={fmtRupees(data.stats.unbilledVariancePaise || 0)} sub="Software uncollected" accent={T.orange} />
+                <StatCard label="Realized Cash"  value={fmtRupees(data.stats.totalRevenuePaise)}  sub="All time collected" accent={T.green} />
               </div>
             </div>
 
@@ -1662,6 +1817,7 @@ function Dashboard({ founderKey }) {
                   onDeleteLead={handleDeleteLead}
                   onUpdateLeadStatus={handleUpdateLeadStatus}
                   onLogActivity={handleLogActivity}
+                  onInspectStore={handleInspectStore}
                 />
               </div>
             )}
@@ -1958,25 +2114,80 @@ function Dashboard({ founderKey }) {
             {/* Modal: Record Manual Payment */}
             {paymentModalClient && (
               <div className="founder-modal-overlay" onClick={() => setPaymentModalClient(null)}>
-                <div className="founder-modal" onClick={e => e.stopPropagation()}>
-                  <h3>Record Manual Payment</h3>
-                  <p>Record manual offline payment for <strong>{paymentModalClient.name && paymentModalClient.name !== '—' ? paymentModalClient.name : 'Unnamed Business'}</strong></p>
-                  <form onSubmit={handleRecordPayment}>
-                    <label>Amount (in ₹)</label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      required
-                      placeholder="e.g. 5000"
-                      value={payAmount}
-                      onChange={e => setPayAmount(e.target.value)}
-                      style={{ width: '100%', padding: 12, borderRadius: 10, border: `1.5px solid ${T.border}`, marginBottom: 20 }}
-                    />
+                <div className="founder-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+                  <h3>💰 Record Manual Payment</h3>
+                  <p>Record itemized payment or receivable for <strong>{paymentModalClient.name && paymentModalClient.name !== '—' ? paymentModalClient.name : 'Unnamed Business'}</strong></p>
+                  <form onSubmit={handleRecordPayment} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    {/* Branch Attribution */}
+                    {paymentModalClient.branches && paymentModalClient.branches.length > 0 && (
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 4 }}>
+                          Target Branch (Outlet)
+                        </label>
+                        <select
+                          value={payOrgId}
+                          onChange={e => setPayOrgId(e.target.value)}
+                          style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${T.border}`, fontSize: 13, background: '#fff' }}
+                        >
+                          <option value="">All Outlets (Client Level)</option>
+                          {paymentModalClient.branches.map(b => (
+                            <option key={b.id} value={b.id}>
+                              {b.name || 'Branch'} [{b.branchCode || 'HQ'}]
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
-                    <div className="founder-modal-actions">
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 4 }}>
+                        Amount Collected (in ₹)
+                      </label>
+                      <input 
+                        type="number" 
+                        step="1"
+                        required
+                        placeholder="e.g. 5494"
+                        value={payAmount}
+                        onChange={e => setPayAmount(e.target.value)}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${T.border}`, fontSize: 14, fontWeight: 700 }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 4 }}>
+                        Payment Method
+                      </label>
+                      <select
+                        value={payMethod}
+                        onChange={e => setPayMethod(e.target.value)}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${T.border}`, fontSize: 13, background: '#fff' }}
+                      >
+                        <option value="UPI">UPI (GPay / PhonePe / Paytm)</option>
+                        <option value="BANK_TRANSFER">Bank Transfer (IMPS / NEFT)</option>
+                        <option value="CASH">Direct Cash</option>
+                        <option value="RAZORPAY">Razorpay Online Gateway</option>
+                        <option value="PENDING_INVOICE">📋 Pending Invoice (Accounts Receivable / Payment Due)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: 4 }}>
+                        Description / Modules Covered
+                      </label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. Annual Suite: Base POS + KOT + Inventory ERP"
+                        value={payDesc}
+                        onChange={e => setPayDesc(e.target.value)}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${T.border}`, fontSize: 12.5 }}
+                      />
+                    </div>
+
+                    <div className="founder-modal-actions" style={{ marginTop: 8 }}>
                       <button type="button" onClick={() => setPaymentModalClient(null)} className="founder-modal-btn cancel">Cancel</button>
                       <button type="submit" disabled={payLoading} className="founder-modal-btn confirm">
-                        {payLoading ? 'Saving...' : 'Record'}
+                        {payLoading ? 'Recording...' : 'Record Payment'}
                       </button>
                     </div>
                   </form>
