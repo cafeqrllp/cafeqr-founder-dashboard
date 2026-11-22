@@ -10,29 +10,80 @@ import {
   FaShieldAlt, 
   FaSpinner, 
   FaExclamationTriangle,
-  FaFileInvoiceDollar
+  FaRedo
 } from 'react-icons/fa';
-import api from '../../utils/api';
+import axios from 'axios';
+import api, { getApiUrl } from '../../utils/api';
 
-export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, customTitle, customSubtitle }) {
-  const [gatewayStatus, setGatewayStatus] = useState('CHECKING'); // 'CHECKING' | 'CONNECTED' | 'SCAN_QR' | 'DISCONNECTED'
+export default function WhatsAppGatewayCard({
+  orgId,
+  orgName,
+  customSessionId,
+  customTitle,
+  customSubtitle,
+  isFounder,
+  founderKey,
+}) {
+  const [gatewayStatus, setGatewayStatus] = useState('CHECKING'); // 'CHECKING' | 'CONNECTED' | 'SCAN_QR' | 'DISCONNECTED' | 'CONNECTING'
   const [qrCodeUrl, setQrCodeUrl] = useState(null);
   const [connectedUser, setConnectedUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [testPhone, setTestPhone] = useState('');
   const [testSending, setTestSending] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState({ text: '', type: '' });
-  const pollTimerRef = useRef(null);
   const isFetchingRef = useRef(false);
 
-  const sessionId = customSessionId || (orgId && orgId !== '0' ? `org_${orgId}` : undefined);
+  const sessionId = customSessionId || (orgId && orgId !== '0' ? `org_${orgId}` : 'cafeqr_official');
+
+  const isFounderMode = Boolean(
+    isFounder ||
+    sessionId === 'cafeqr_official' ||
+    (typeof window !== 'undefined' && window.location.pathname.startsWith('/founder'))
+  );
+
+  const getEffectiveFounderKey = () => {
+    if (founderKey) return founderKey;
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('founder_key') || process.env.NEXT_PUBLIC_FOUNDER_KEY || '';
+    }
+    return '';
+  };
+
+  const getBaseApiUrl = () => {
+    return getApiUrl().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  };
+
+  const getFounderHeaders = () => {
+    const key = getEffectiveFounderKey();
+    return key ? { 'X-Founder-Key': key } : {};
+  };
+
+  // Keep ref synchronized with current QR to prevent race conditions during polling
+  const qrCodeUrlRef = useRef(qrCodeUrl);
+  useEffect(() => {
+    qrCodeUrlRef.current = qrCodeUrl;
+  }, [qrCodeUrl]);
+
+  const gatewayStatusRef = useRef(gatewayStatus);
+  useEffect(() => {
+    gatewayStatusRef.current = gatewayStatus;
+  }, [gatewayStatus]);
 
   const fetchStatus = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
       const params = sessionId ? { sessionId } : {};
-      const res = await api.get('/api/v1/founder/whatsapp/status', { params });
+      let res;
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/status`;
+        res = await axios.get(url, {
+          params,
+          headers: getFounderHeaders(),
+        });
+      } else {
+        res = await api.get('/api/v1/whatsapp/status', { params });
+      }
       const data = res.data?.data || res.data || {};
       
       const st = data.status || 'DISCONNECTED';
@@ -42,8 +93,12 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
       if (st === 'CONNECTED') {
         setQrCodeUrl(null);
       } else if (st === 'SCAN_QR' || st === 'CONNECTING' || data.hasQr) {
-        // Only fetch QR if gateway indicates an active pairing QR is waiting
-        await fetchQr();
+        // CRITICAL FIX: Only fetch QR if we do not already hold an active QR code on screen!
+        // Re-fetching QR every 4 seconds cycles the ephemeral pairing token on WAHA,
+        // which instantly invalidates the phone scan handshake with "Couldn't link device".
+        if (!qrCodeUrlRef.current) {
+          await fetchQr();
+        }
       }
     } catch (err) {
       setGatewayStatus('DISCONNECTED');
@@ -57,7 +112,16 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
   const fetchQr = async () => {
     try {
       const params = sessionId ? { sessionId } : {};
-      const res = await api.get('/api/v1/founder/whatsapp/qr', { params });
+      let res;
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/qr`;
+        res = await axios.get(url, {
+          params,
+          headers: getFounderHeaders(),
+        });
+      } else {
+        res = await api.get('/api/v1/whatsapp/qr', { params });
+      }
       const data = res.data?.data || res.data || {};
       if (data.qr) {
         setQrCodeUrl(data.qr);
@@ -72,11 +136,6 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     }
   };
 
-  const gatewayStatusRef = useRef(gatewayStatus);
-  useEffect(() => {
-    gatewayStatusRef.current = gatewayStatus;
-  }, [gatewayStatus]);
-
   useEffect(() => {
     let alive = true;
     let timerId = null;
@@ -89,10 +148,9 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
       }
       if (!alive) return;
       const currentSt = gatewayStatusRef.current;
-      // Fast poll (4s) ONLY when user is scanning QR or connecting.
-      // Otherwise slow heartbeat (25s) when connected or idle to prevent server flooding.
+      // Heartbeat: 6s when scanning/connecting (status check only, no QR re-request), 25s when connected
       const nextDelay = isVisible 
-        ? ((currentSt === 'SCAN_QR' || currentSt === 'CONNECTING') ? 4000 : 25000)
+        ? ((currentSt === 'SCAN_QR' || currentSt === 'CONNECTING') ? 6000 : 25000)
         : 30000;
       timerId = setTimeout(poll, nextDelay);
     };
@@ -107,13 +165,20 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
   }, [sessionId]);
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Are you sure you want to unlink this WhatsApp number? Customers will not receive WhatsApp bills until re-linked.')) {
+    if (!window.confirm('Are you sure you want to unlink this WhatsApp number? Customers will not receive WhatsApp messages until re-linked.')) {
       return;
     }
     setLoading(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      await api.post('/api/v1/founder/whatsapp/disconnect', { sessionId });
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/disconnect`;
+        await axios.post(url, { sessionId }, {
+          headers: getFounderHeaders(),
+        });
+      } else {
+        await api.post('/api/v1/whatsapp/disconnect', { sessionId });
+      }
       setGatewayStatus('DISCONNECTED');
       setConnectedUser(null);
       setQrCodeUrl(null);
@@ -121,6 +186,45 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
       fetchStatus();
     } catch (err) {
       setFeedbackMsg({ text: 'Failed to unlink WhatsApp session.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Reset Session & Generate New QR:
+   * Purges any stale / corrupted .sessions files on WAHA, then requests a fresh pairing socket.
+   */
+  const handleResetSession = async () => {
+    setLoading(true);
+    setQrCodeUrl(null);
+    setGatewayStatus('CONNECTING');
+    setFeedbackMsg({ text: 'Purging stale WAHA session files & clearing locks...', type: 'info' });
+    try {
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/disconnect`;
+        await axios.post(url, { sessionId }, {
+          headers: getFounderHeaders(),
+        });
+      } else {
+        await api.post('/api/v1/whatsapp/disconnect', { sessionId });
+      }
+      setFeedbackMsg({ text: 'Session purged successfully. Generating brand-new pairing QR...', type: 'success' });
+      // Allow WAHA gateway 1.5s to cleanly delete session directory before creating new socket
+      setTimeout(async () => {
+        await fetchQr();
+        setLoading(false);
+      }, 1500);
+    } catch (err) {
+      setFeedbackMsg({ text: 'Failed to purge session on gateway.', type: 'error' });
+      setLoading(false);
+    }
+  };
+
+  const handleManualRefreshQr = async () => {
+    setLoading(true);
+    try {
+      await fetchQr();
     } finally {
       setLoading(false);
     }
@@ -135,10 +239,18 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
     setTestSending(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      const res = await api.post('/api/v1/founder/whatsapp/test', { phone: testPhone.trim(), sessionId });
+      let res;
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/test`;
+        res = await axios.post(url, { phone: testPhone.trim(), sessionId }, {
+          headers: getFounderHeaders(),
+        });
+      } else {
+        res = await api.post('/api/v1/founder/whatsapp/test', { phone: testPhone.trim(), sessionId });
+      }
       const data = res.data?.data || res.data || {};
       if (data.success !== false) {
-        setFeedbackMsg({ text: `✓ Test receipt sent successfully to +${testPhone}!`, type: 'success' });
+        setFeedbackMsg({ text: `✓ Test message sent successfully to +${testPhone}!`, type: 'success' });
         setTestPhone('');
       } else {
         let errMsg = data.message || 'Failed to send test message.';
@@ -168,14 +280,21 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
 
   const handleHealContact = async () => {
     if (!testPhone || testPhone.trim().length < 10) {
-      setFeedbackMsg({ text: 'Please enter a 10-digit customer mobile number to heal session.', type: 'error' });
+      setFeedbackMsg({ text: 'Please enter a 10-digit mobile number to heal session.', type: 'error' });
       return;
     }
     setTestSending(true);
     setFeedbackMsg({ text: '', type: '' });
     try {
-      const res = await api.post('/api/v1/founder/whatsapp/clear-contact-session', { phone: testPhone.trim(), sessionId });
-      const data = res.data?.data || res.data || {};
+      let res;
+      if (isFounderMode) {
+        const url = `${getBaseApiUrl()}/api/v1/founder/whatsapp/clear-contact-session`;
+        res = await axios.post(url, { phone: testPhone.trim(), sessionId }, {
+          headers: getFounderHeaders(),
+        });
+      } else {
+        res = await api.post('/api/v1/founder/whatsapp/clear-contact-session', { phone: testPhone.trim(), sessionId });
+      }
       setFeedbackMsg({ 
         text: `✓ Signal session reset for +${testPhone}. Next message will re-negotiate fresh encryption keys.`, 
         type: 'success' 
@@ -225,14 +344,14 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           disabled={loading}
         >
           <FaSyncAlt className={loading ? 'spinning' : ''} size={13} />
-          <span>Refresh</span>
+          <span className="wa-refresh-label">Refresh</span>
         </button>
       </div>
 
       {/* Feedback banner */}
       {feedbackMsg.text && (
         <div className={`wa-alert-banner ${feedbackMsg.type}`}>
-          {feedbackMsg.type === 'success' ? <FaCheckCircle size={14} /> : <FaExclamationTriangle size={14} />}
+          {feedbackMsg.type === 'success' ? <FaCheckCircle size={14} /> : feedbackMsg.type === 'info' ? <FaSyncAlt className="spinning" size={14} /> : <FaExclamationTriangle size={14} />}
           <span>{feedbackMsg.text}</span>
         </div>
       )}
@@ -253,7 +372,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
                   <strong>+{connectedUser?.phone || 'Cafe QR Official'}</strong>
                 </div>
                 <p className="wa-desc">
-                  {customSessionId === 'cafeqr_official'
+                  {sessionId === 'cafeqr_official'
                     ? 'Official Cafe QR WhatsApp number linked for sending system OTPs for Client signups, logins, and Customer table & delivery orders.'
                     : 'Every order settled in POS Sales, Live Orders, or Credit Settlements with a customer phone will automatically receive a digital receipt.'}
                 </p>
@@ -264,12 +383,12 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
             <div className="wa-test-box">
               <div className="wa-test-label">
                 <FaPaperPlane size={12} color="#059669" />
-                <span>Test WhatsApp Receipt:</span>
+                <span>Test WhatsApp Delivery:</span>
               </div>
               <form className="wa-test-form" onSubmit={handleSendTest}>
                 <input 
                   type="tel"
-                  placeholder="Enter 10-digit customer phone"
+                  placeholder="Enter 10-digit mobile number"
                   value={testPhone}
                   onChange={e => setTestPhone(e.target.value)}
                   maxLength={13}
@@ -277,7 +396,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
                 />
                 <button type="submit" disabled={testSending || !testPhone.trim()} className="wa-btn-test">
                   {testSending ? <FaSpinner className="spinning" size={12} /> : <FaPaperPlane size={12} />}
-                  <span>{testSending ? 'Sending...' : 'Send Test Bill'}</span>
+                  <span>{testSending ? 'Sending...' : 'Send Test Message'}</span>
                 </button>
                 <button 
                   type="button" 
@@ -291,7 +410,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
                 </button>
               </form>
               <div className="wa-e2ee-hint">
-                💡 <em>If recipient sees &ldquo;Waiting for this message&rdquo;: keep your restaurant phone online with WhatsApp open for 1-2 minutes to complete multi-device encryption sync, or click &ldquo;Heal Session&rdquo;.</em>
+                💡 <em>If recipient sees &ldquo;Waiting for this message&rdquo;: keep your WhatsApp open for 1-2 minutes to complete multi-device encryption sync, or click &ldquo;Heal Session&rdquo;.</em>
               </div>
             </div>
 
@@ -315,13 +434,13 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
             <div className="wa-instructions-panel">
               <h4 className="wa-step-title">
                 <FaMobileAlt size={15} color="#25D366" />
-                <span>Link Restaurant WhatsApp in 3 Easy Steps</span>
+                <span>Link WhatsApp in 3 Easy Steps</span>
               </h4>
               <ol className="wa-steps-list">
                 <li>
                   <span className="step-num">1</span>
                   <div className="step-content">
-                    <strong>Open WhatsApp</strong> on the cafe&apos;s phone.
+                    <strong>Open WhatsApp</strong> on your official phone.
                   </div>
                 </li>
                 <li>
@@ -333,14 +452,26 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
                 <li>
                   <span className="step-num">3</span>
                   <div className="step-content">
-                    Tap <strong>Link a Device</strong> and point your camera at the QR code on the right.
+                    Tap <strong>Link a Device</strong> and point your camera at the stable QR code on the right.
                   </div>
                 </li>
               </ol>
 
+              {/* Troubleshooting & Multi-Device Limit Advice */}
+              <div className="wa-pairing-hints">
+                <div className="wa-hint-item">
+                  <span className="wa-hint-bullet">⚠️</span>
+                  <span>WhatsApp allows max <strong>4 linked devices</strong>. Check <em>Linked Devices</em> on your phone; if full, remove one before scanning.</span>
+                </div>
+                <div className="wa-hint-item">
+                  <span className="wa-hint-bullet">🔄</span>
+                  <span>If your phone says <em>&quot;Couldn&apos;t link device&quot;</em>, click <strong>Reset Session &amp; New QR</strong> to purge stale session locks.</span>
+                </div>
+              </div>
+
               <div className="wa-security-note">
                 <FaShieldAlt size={14} color="#64748b" />
-                <span>100% Free & Secure. Messages route directly through your restaurant&apos;s WhatsApp Web session with zero per-message charges.</span>
+                <span>100% Free &amp; Secure. Messages route directly through your WhatsApp Web session with zero per-message charges.</span>
               </div>
             </div>
 
@@ -357,13 +488,37 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
                   </div>
                 ) : (
                   <div className="wa-qr-placeholder">
-                    <FaSpinner size={32} className="spinning" color="#25D366" />
+                    <FaSpinner size={24} className="spinning" color="#25D366" />
                     <p className="wa-qr-loading-text">
                       {gatewayStatus === 'CONNECTING' ? 'Initializing WhatsApp session...' : 'Generating QR code...'}
                     </p>
                     <small>Point your WhatsApp camera at the code once generated</small>
                   </div>
                 )}
+              </div>
+
+              {/* Controls directly under QR code */}
+              <div className="wa-qr-controls">
+                <button 
+                  type="button" 
+                  onClick={handleManualRefreshQr}
+                  className="wa-btn-qr-action refresh"
+                  disabled={loading}
+                  title="Refresh QR code if expired"
+                >
+                  <FaSyncAlt size={11} className={loading ? 'spinning' : ''} />
+                  <span>Refresh QR</span>
+                </button>
+                <button 
+                  type="button" 
+                  onClick={handleResetSession}
+                  className="wa-btn-qr-action reset"
+                  disabled={loading}
+                  title="Purge session files and start a brand-new pairing attempt"
+                >
+                  <FaRedo size={11} className={loading ? 'spinning' : ''} />
+                  <span>Reset Session &amp; New QR</span>
+                </button>
               </div>
             </div>
           </div>
@@ -388,9 +543,9 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 18px 24px;
-          background: linear-gradient(180deg, #fafbfc 0%, #f1f5f9 100%);
-          border-bottom: 1.5px solid #e2e8f0;
+          padding: 16px 20px;
+          background: #ffffff;
+          border-bottom: 1px solid #f1f5f9;
           gap: 16px;
         }
 
@@ -403,9 +558,9 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         }
 
         .wa-logo-box {
-          width: 44px;
-          height: 44px;
-          border-radius: 12px;
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
           background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
           display: flex;
           align-items: center;
@@ -544,6 +699,12 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           border-bottom: 1px solid #a7f3d0;
         }
 
+        .wa-alert-banner.info {
+          background: #eff6ff;
+          color: #1d4ed8;
+          border-bottom: 1px solid #bfdbfe;
+        }
+
         .wa-alert-banner.error {
           background: #fef2f2;
           color: #991b1b;
@@ -551,7 +712,7 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         }
 
         .wa-card-body {
-          padding: 24px;
+          padding: 20px;
           box-sizing: border-box;
           width: 100%;
         }
@@ -559,17 +720,17 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         /* Responsive Setup Grid */
         .wa-setup-grid {
           display: grid;
-          grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
+          grid-template-columns: minmax(0, 1.3fr) minmax(220px, 260px);
           gap: 28px;
-          align-items: center;
+          align-items: flex-start;
         }
 
         .wa-step-title {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin: 0 0 16px 0;
-          font-size: 14.5px;
+          margin: 0 0 14px 0;
+          font-size: 13.5px;
           font-weight: 800;
           color: #0f172a;
         }
@@ -577,29 +738,29 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         .wa-steps-list {
           list-style: none;
           padding: 0;
-          margin: 0 0 20px 0;
+          margin: 0 0 16px 0;
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 10px;
         }
 
         .wa-steps-list li {
           display: flex;
           align-items: flex-start;
-          gap: 12px;
-          font-size: 13px;
-          color: #334155;
+          gap: 10px;
+          font-size: 12.5px;
+          color: #475569;
           line-height: 1.45;
         }
 
         .step-num {
-          width: 24px;
-          height: 24px;
+          width: 22px;
+          height: 22px;
+          font-size: 11px;
           border-radius: 50%;
           background: #f1f5f9;
           color: #0f172a;
           font-weight: 800;
-          font-size: 12px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -611,33 +772,56 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           color: #0f172a;
         }
 
-        .wa-security-note {
+        .wa-pairing-hints {
+          background: #fffbeb;
+          border: 1px solid #fde68a;
+          border-radius: 100px;
+          padding: 10px 14px;
+          border-radius: 10px;
+          margin-bottom: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .wa-hint-item {
           display: flex;
           align-items: flex-start;
           gap: 8px;
-          background: #f8fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 10px;
-          padding: 10px 14px;
           font-size: 11.5px;
-          color: #64748b;
+          color: #92400e;
+          line-height: 1.4;
+        }
+
+        .wa-hint-bullet {
+          flex-shrink: 0;
+        }
+
+        .wa-security-note {
+          display: flex;
+          align-items: flex-start;
+          gap: 6px;
+          font-size: 11.5px;
+          color: #94a3b8;
           line-height: 1.4;
         }
 
         /* QR Frame */
         .wa-qr-display-panel {
           display: flex;
+          flex-direction: column;
           justify-content: center;
           align-items: center;
+          gap: 10px;
         }
 
         .wa-qr-frame {
-          width: min(260px, 80vw);
+          width: min(220px, 80vw);
           aspect-ratio: 1/1;
           background: #ffffff;
           border: 2px dashed #cbd5e1;
           border-radius: 16px;
-          padding: 12px;
+          padding: 10px;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -653,14 +837,14 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 8px;
+          gap: 6px;
         }
 
         .wa-qr-img {
           width: 100%;
           height: 100%;
-          max-width: 210px;
-          max-height: 210px;
+          max-width: 195px;
+          max-height: 195px;
           object-fit: contain;
           border-radius: 8px;
         }
@@ -668,13 +852,13 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         .wa-qr-scan-badge {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 5px;
           background: #f0fdf4;
           color: #166534;
           border: 1px solid #bbf7d0;
           border-radius: 100px;
-          padding: 3px 10px;
-          font-size: 11px;
+          padding: 2px 9px;
+          font-size: 10.5px;
           font-weight: 700;
         }
 
@@ -683,21 +867,70 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 10px;
-          padding: 16px;
+          gap: 8px;
+          padding: 12px;
         }
 
         .wa-qr-loading-text {
           margin: 0;
-          font-size: 13px;
+          font-size: 12.5px;
           font-weight: 700;
           color: #334155;
         }
 
         .wa-qr-placeholder small {
-          font-size: 11px;
+          font-size: 10.5px;
           color: #94a3b8;
-          max-width: 180px;
+          max-width: 160px;
+        }
+
+        .wa-qr-controls {
+          display: flex;
+          gap: 8px;
+          width: 100%;
+          max-width: 220px;
+        }
+
+        .wa-btn-qr-action {
+          flex: 1;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          padding: 6px 8px;
+          border-radius: 8px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+
+        .wa-btn-qr-action.refresh {
+          background: #f8fafc;
+          border: 1px solid #cbd5e1;
+          color: #475569;
+        }
+
+        .wa-btn-qr-action.refresh:hover:not(:disabled) {
+          background: #f1f5f9;
+          color: #0f172a;
+        }
+
+        .wa-btn-qr-action.reset {
+          background: #fff7ed;
+          border: 1px solid #fed7aa;
+          color: #c2410c;
+        }
+
+        .wa-btn-qr-action.reset:hover:not(:disabled) {
+          background: #ffedd5;
+          color: #9a3412;
+        }
+
+        .wa-btn-qr-action:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         /* Connected Panel */
@@ -889,26 +1122,28 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         /* ───────── UNIVERSAL RESPONSIVE BREAKPOINTS ───────── */
         @media (max-width: 768px) {
           .wa-card-header {
-            flex-direction: column;
             align-items: flex-start;
             padding: 14px 16px;
           }
           .wa-refresh-btn {
-            align-self: flex-end;
-            margin-top: -6px;
+            padding: 8px;
+            border-radius: 9px;
+          }
+          .wa-refresh-label {
+            display: none;
           }
           .wa-card-body {
             padding: 16px;
           }
           .wa-setup-grid {
             grid-template-columns: 1fr;
-            gap: 20px;
+            gap: 16px;
           }
           .wa-qr-display-panel {
             order: -1;
           }
           .wa-qr-frame {
-            width: min(220px, 75vw);
+            width: min(200px, 75vw);
           }
           .wa-connected-details {
             flex-direction: column;
@@ -928,12 +1163,11 @@ export default function WhatsAppGatewayCard({ orgId, orgName, customSessionId, c
         }
 
         @media (max-width: 400px) {
-          .wa-header-brand {
-            flex-direction: column;
-            align-items: flex-start;
-          }
           .wa-title-row h3 {
-            font-size: 15px;
+            font-size: 14.5px;
+          }
+          .wa-header-text p {
+            font-size: 12px;
           }
           .wa-qr-frame {
             width: 100%;
